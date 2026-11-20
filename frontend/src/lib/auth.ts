@@ -285,27 +285,24 @@ export async function signUpWithCredentials(
 }
 
 /**
- * Sign in using Google OAuth against the backend API.
+ * Sign in using verified Google Identity Services credential token against the backend API.
  */
-export async function signInWithGoogle(customEmail?: string, customName?: string, avatarUrl?: string): Promise<UserProfile> {
-  const cleanEmail = (customEmail || "user@gmail.com").trim().toLowerCase();
-  const cleanName = customName || cleanEmail.split("@")[0].replace(/[._]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+export async function signInWithGoogle(credential: string): Promise<UserProfile> {
+  if (!credential || !credential.trim()) {
+    throw new Error("Missing Google credential token.");
+  }
 
   const res = await fetch(`${getApiBase()}/api/auth/google`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      email: cleanEmail,
-      name: cleanName,
-      avatar_url: avatarUrl || "",
-    }),
+    body: JSON.stringify({ credential: credential.trim() }),
   });
 
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
-    throw new Error(errData.detail || "Google authentication failed.");
+    throw new Error(errData.detail || "Google authentication failed. Please try again.");
   }
 
   const data = await res.json();
@@ -317,7 +314,7 @@ export async function signInWithGoogle(customEmail?: string, customName?: string
     phone: data.user.phone || undefined,
     dob: data.user.dob || undefined,
     plan: data.user.plan || "free",
-    provider: data.user.provider || "google",
+    provider: "google",
     createdAt: data.user.created_at,
   };
 

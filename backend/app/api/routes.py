@@ -7,7 +7,13 @@ from pydantic import BaseModel
 from app.agents.supervisor import run_agent_pipeline
 from app.config import get_settings
 from app.core.media_parser import parse_uploaded_file
-from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    decode_access_token,
+    hash_password,
+    verify_google_credential,
+    verify_password,
+)
 from app.core.voice import text_to_speech_base64, transcribe_audio
 from app.db.chroma_client import get_memory_manager
 from app.db.sqlite_client import (
@@ -104,9 +110,7 @@ class SignInRequest(BaseModel):
 
 
 class GoogleAuthRequest(BaseModel):
-    email: str
-    name: Optional[str] = None
-    avatar_url: Optional[str] = None
+    credential: str
 
 
 class UpdateProfileRequest(BaseModel):
@@ -195,24 +199,44 @@ async def signin_endpoint(data: SignInRequest):
 
 @router.post("/auth/google")
 async def google_auth_endpoint(data: GoogleAuthRequest):
-    """Authenticate with Google OAuth, finding or provisioning an isolated user profile."""
-    clean_email = data.email.strip().lower()
-    if not clean_email or "@" not in clean_email:
-        raise HTTPException(status_code=400, detail="Invalid email address.")
+    """
+    Authenticate using a cryptographically verified Google ID token.
+    Extracts verified sub, email, name, and picture, creating or syncing the user record.
+    """
+    try:
+        google_info = verify_google_credential(data.credential)
+    except Exception as e:
+        logger.warning("Google authentication rejected: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Google authentication failed: {str(e)}",
+        )
 
-    user = get_user_by_email(clean_email)
+    email = google_info["email"]
+    name = google_info.get("name") or email.split("@")[0].replace(".", " ").title()
+    picture = google_info.get("picture", "")
+
+    user = get_user_by_email(email)
     if not user:
         user = create_user(
-            email=clean_email,
+            email=email,
             password_hash=None,
-            name=data.name or clean_email.split("@")[0].replace(".", " ").title(),
+            name=name,
             provider="google",
-            avatar_url=data.avatar_url or "",
+            avatar_url=picture,
             plan="free",
         )
     else:
-        user.pop("password_hash", None)
+        # Sync profile fields if updated on Google
+        updates = {}
+        if picture and not user.get("avatar_url"):
+            updates["avatar_url"] = picture
+        if name and not user.get("name"):
+            updates["name"] = name
+        if updates:
+            user = update_user_profile_db(user["id"], updates) or user
 
+    user.pop("password_hash", None)
     token = create_access_token({"sub": user["id"], "email": user["email"]})
     return {"token": token, "user": user}
 

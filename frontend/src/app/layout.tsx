@@ -42,6 +42,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark">
+      <head>
+        {/* Google Identity Services (GSI) */}
+        <script src="https://accounts.google.com/gsi/client" async defer></script>
+      </head>
       <body className="min-h-screen bg-[#0d0f14] text-slate-100 antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
         {children}
         {/* Service Worker Registration */}

@@ -129,3 +129,83 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
             # Fall back to stdlib decode
             return _stdlib_decode_jwt(clean_token, secret)
     return _stdlib_decode_jwt(clean_token, secret)
+
+
+# --- Google ID Token Verification ---
+
+def verify_google_credential(credential: str) -> Dict[str, Any]:
+    """
+    Cryptographically verifies a Google ID token from Google Identity Services.
+    Validates signature directly against Google's public keys, checks issuer,
+    and returns verified claims (sub, email, name, picture).
+    """
+    if not credential or not credential.strip():
+        raise ValueError("Google credential token is missing.")
+
+    settings = get_settings()
+    client_id = settings.GOOGLE_CLIENT_ID or None
+
+    # Method 1: Use google-auth library
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport import requests as google_requests
+
+        request = google_requests.Request()
+        id_info = id_token.verify_oauth2_token(credential.strip(), request, audience=client_id)
+
+        iss = id_info.get("iss", "")
+        if iss not in ("accounts.google.com", "https://accounts.google.com"):
+            raise ValueError(f"Unrecognized Google token issuer: {iss}")
+
+        email = id_info.get("email")
+        if not email:
+            raise ValueError("No email returned in Google token.")
+
+        if not id_info.get("email_verified"):
+            raise ValueError("Google email is not verified.")
+
+        return {
+            "google_id": id_info.get("sub"),
+            "email": email.strip().lower(),
+            "name": id_info.get("name") or email.split("@")[0].title(),
+            "picture": id_info.get("picture", ""),
+        }
+    except Exception as e:
+        logger.warning("google.oauth2.id_token verification notice: %s. Trying direct Google tokeninfo endpoint...", e)
+
+    # Method 2: Direct call to Google's tokeninfo API
+    try:
+        import requests as py_requests
+
+        resp = py_requests.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential.strip()},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            raise ValueError(f"Google token verification failed with status {resp.status_code}")
+
+        data = resp.json()
+        iss = data.get("iss", "")
+        if iss not in ("accounts.google.com", "https://accounts.google.com"):
+            raise ValueError(f"Unrecognized Google token issuer: {iss}")
+
+        if client_id and data.get("aud") != client_id:
+            raise ValueError("Audience mismatch in Google token.")
+
+        if str(data.get("email_verified", "")).lower() != "true":
+            raise ValueError("Google email is not verified.")
+
+        email = data.get("email")
+        if not email:
+            raise ValueError("No email found in Google token.")
+
+        return {
+            "google_id": data.get("sub"),
+            "email": email.strip().lower(),
+            "name": data.get("name") or email.split("@")[0].title(),
+            "picture": data.get("picture", ""),
+        }
+    except Exception as e:
+        logger.error("Failed to verify Google token: %s", e)
+        raise ValueError(f"Invalid Google ID token: {e}")

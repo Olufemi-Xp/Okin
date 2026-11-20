@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Lock,
   Mail,
@@ -41,6 +41,69 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [transitionMessage, setTransitionMessage] = useState("Signing into Okin...");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const googleBtnRef = useRef<HTMLDivElement>(null);
+  const [googleInitialized, setGoogleInitialized] = useState(false);
+
+  // Initialize Google Identity Services if client ID is configured
+  useEffect(() => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId || typeof window === "undefined") return;
+
+    const initGsi = () => {
+      const g = (window as any).google;
+      if (g?.accounts?.id) {
+        try {
+          g.accounts.id.initialize({
+            client_id: clientId,
+            callback: async (response: any) => {
+              if (response?.credential) {
+                setTransitionMessage("Verifying Google account...");
+                setIsLoading(true);
+                setErrorMsg(null);
+                try {
+                  const user = await signInWithGoogle(response.credential);
+                  onSignInSuccess(user);
+                } catch (err: any) {
+                  setErrorMsg(err.message || "Google authentication failed. Please try again.");
+                  setIsLoading(false);
+                }
+              }
+            },
+            auto_select: false,
+            cancel_on_tap_outside: true,
+          });
+
+          if (googleBtnRef.current) {
+            googleBtnRef.current.innerHTML = "";
+            g.accounts.id.renderButton(googleBtnRef.current, {
+              theme: isDarkMode ? "filled_black" : "outline",
+              size: "large",
+              shape: "rectangular",
+              text: "continue_with",
+              width: 320,
+              logo_alignment: "left",
+            });
+          }
+          setGoogleInitialized(true);
+        } catch (e) {
+          console.error("Failed to render Google button:", e);
+        }
+      }
+    };
+
+    if ((window as any).google?.accounts?.id) {
+      initGsi();
+    } else {
+      const timer = setInterval(() => {
+        if ((window as any).google?.accounts?.id) {
+          clearInterval(timer);
+          initGsi();
+        }
+      }, 250);
+      return () => clearInterval(timer);
+    }
+  }, [isDarkMode, onSignInSuccess]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
@@ -72,16 +135,21 @@ export const AuthView: React.FC<AuthViewProps> = ({
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setTransitionMessage("Authenticating with Google...");
-    setIsLoading(true);
-    setErrorMsg(null);
-    try {
-      const user = await signInWithGoogle();
-      onSignInSuccess(user);
-    } catch (err: any) {
-      setErrorMsg(err.message || "Google Sign-In failed. Please try with email.");
-      setIsLoading(false);
+  const handleGoogleSignInClick = () => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      setErrorMsg(
+        "Google Client ID is not configured yet. Please add NEXT_PUBLIC_GOOGLE_CLIENT_ID to your Vercel environment variables, or sign in below with email and password."
+      );
+      return;
+    }
+
+    const g = typeof window !== "undefined" ? (window as any).google : null;
+    if (g?.accounts?.id) {
+      setErrorMsg(null);
+      g.accounts.id.prompt();
+    } else {
+      setErrorMsg("Google Sign-In is still loading. Please check your internet connection and try again.");
     }
   };
 
@@ -180,34 +248,45 @@ export const AuthView: React.FC<AuthViewProps> = ({
             </div>
           )}
 
-          {/* Continue with Google Button */}
-          <button
-            type="button"
-            onClick={handleGoogleSignIn}
-            disabled={isLoading}
-            className="w-full flex items-center justify-center gap-3 py-2.5 px-4 rounded-xl border border-slate-200 dark:border-white/[0.1] bg-white hover:bg-slate-50 dark:bg-[#181c24] dark:hover:bg-[#1f242e] text-slate-800 dark:text-slate-100 text-xs font-semibold shadow-xs hover:shadow-md transition-all cursor-pointer active:scale-[0.99] disabled:opacity-50"
-          >
-            {/* Google 4-Color G Logo SVG */}
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
-              <path
-                fill="#4285F4"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-              />
-              <path
-                fill="#EA4335"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-              />
-            </svg>
-            <span>Continue with Google</span>
-          </button>
+          {/* Google Sign-In Container */}
+          <div className="w-full flex flex-col items-center justify-center">
+            {/* Native GSI Rendered Button */}
+            <div
+              ref={googleBtnRef}
+              className={`w-full flex justify-center min-h-[44px] ${googleInitialized ? "flex" : "hidden"}`}
+            />
+
+            {/* Custom Styled Button (Displayed before GSI loads or if Client ID is needed) */}
+            {!googleInitialized && (
+              <button
+                type="button"
+                onClick={handleGoogleSignInClick}
+                disabled={isLoading}
+                className="w-full flex items-center justify-center gap-3 py-2.5 px-4 rounded-xl border border-slate-200 dark:border-white/[0.1] bg-white hover:bg-slate-50 dark:bg-[#181c24] dark:hover:bg-[#1f242e] text-slate-800 dark:text-slate-100 text-xs font-semibold shadow-xs hover:shadow-md transition-all cursor-pointer active:scale-[0.99] disabled:opacity-50"
+              >
+                {/* Google 4-Color G Logo SVG */}
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                  <path
+                    fill="#4285F4"
+                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                  />
+                </svg>
+                <span>Continue with Google</span>
+              </button>
+            )}
+          </div>
 
           {/* Divider */}
           <div className="relative flex items-center justify-center">

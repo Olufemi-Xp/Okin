@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     APP_ACCESS_PIN: Optional[str] = None
     FRONTEND_URL: str = "http://localhost:3000"
     DATA_DIR: str = "./data"
+    GOOGLE_CLIENT_ID: Optional[str] = None
     JWT_SECRET: str = "okin-jwt-secret-key-32chars-secure-token-2026"
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_DAYS: int = 30
