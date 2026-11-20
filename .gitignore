@@ -1,0 +1,38 @@
+# Environment files & secrets (NEVER commit secrets)
+.env
+.env.*
+*.env
+backend/.env
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+out/
+frontend/out/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/venv/
+backend/env/
+ENV/
+data/
+*.db
+*.db-wal
+*.db-shm
+ai_memory/
+
+# Vercel & IDE
+.vercel
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

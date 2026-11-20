@@ -1,0 +1,4 @@
+INFO:     Started server process [12720]
+INFO:     Waiting for application startup.
+2026-11-18 18:26:13,943 [INFO] suzzy-ai: Initializing Suzzy AI Backend (Data Directory: ./data)...
+^C
