@@ -17,6 +17,7 @@ import { PageTransitionOverlay } from "./PageTransitionOverlay";
 import {
   UserProfile,
   signInWithCredentials,
+  signUpWithCredentials,
   signInWithGoogle,
 } from "@/lib/auth";
 
@@ -40,7 +41,7 @@ export const AuthView: React.FC<AuthViewProps> = ({
   const [transitionMessage, setTransitionMessage] = useState("Signing into Okin...");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
@@ -56,32 +57,32 @@ export const AuthView: React.FC<AuthViewProps> = ({
 
     setTransitionMessage(mode === "signup" ? "Creating your account..." : "Signing into Okin...");
     setIsLoading(true);
-    setTimeout(() => {
-      try {
-        const user = signInWithCredentials(cleanEmail, mode === "signup" ? name : undefined);
-        onSignInSuccess(user);
-      } catch (err: any) {
-        setErrorMsg("Failed to sign in. Please try again.");
-      } finally {
-        setIsLoading(false);
+
+    try {
+      let user: UserProfile;
+      if (mode === "signup") {
+        user = await signUpWithCredentials(cleanEmail, password, name);
+      } else {
+        user = await signInWithCredentials(cleanEmail, password);
       }
-    }, 450);
+      onSignInSuccess(user);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to authenticate. Please check your credentials.");
+      setIsLoading(false);
+    }
   };
 
-  const handleGoogleSignIn = () => {
+  const handleGoogleSignIn = async () => {
     setTransitionMessage("Authenticating with Google...");
     setIsLoading(true);
     setErrorMsg(null);
-    setTimeout(() => {
-      try {
-        const user = signInWithGoogle();
-        onSignInSuccess(user);
-      } catch (err: any) {
-        setErrorMsg("Google Sign-In failed. Please try with email.");
-      } finally {
-        setIsLoading(false);
-      }
-    }, 500);
+    try {
+      const user = await signInWithGoogle();
+      onSignInSuccess(user);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Google Sign-In failed. Please try with email.");
+      setIsLoading(false);
+    }
   };
 
   return (

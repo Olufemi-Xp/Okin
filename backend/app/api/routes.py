@@ -7,23 +7,28 @@ from pydantic import BaseModel
 from app.agents.supervisor import run_agent_pipeline
 from app.config import get_settings
 from app.core.media_parser import parse_uploaded_file
+from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.core.voice import text_to_speech_base64, transcribe_audio
 from app.db.chroma_client import get_memory_manager
 from app.db.sqlite_client import (
     add_message,
     create_thread,
+    create_user,
     delete_thread,
     get_messages,
     get_thread,
     get_threads,
+    get_user_by_email,
+    get_user_by_id,
     update_thread_title,
+    update_user_profile_db,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 
-# --- Authentication Dependency / Verification ---
+# --- Authentication Dependency & Session Extraction ---
 
 def verify_access_pin(request: Request) -> None:
     settings = get_settings()
@@ -36,11 +41,80 @@ def verify_access_pin(request: Request) -> None:
             )
 
 
+def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
+    """Extract authenticated user profile from Authorization: Bearer <jwt>."""
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split(" ", 1)[1].strip()
+    payload = decode_access_token(token)
+    if not payload or "sub" not in payload:
+        return None
+    user = get_user_by_id(payload["sub"])
+    if not user:
+        return None
+    user_data = dict(user)
+    user_data.pop("password_hash", None)
+    return user_data
+
+
+def get_current_user_required(request: Request) -> Dict[str, Any]:
+    """Require a verified JWT token; raises HTTP 401 if missing or invalid."""
+    user = get_current_user_optional(request)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please sign in to your Okin account.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
 def extract_session_id(request: Request) -> str:
-    session_id = request.headers.get("X-Session-ID")
-    if not session_id or not session_id.strip():
-        return "default-session"
-    return session_id.strip()
+    """
+    Extracts an isolated session identifier.
+    If authenticated via JWT, strictly partitions the session by the unique user ID (e.g. user_usr_123).
+    This guarantees that every user has an isolated session, chat history, organizer, and memory.
+    """
+    user = get_current_user_optional(request)
+    raw_session = request.headers.get("X-Session-ID", "").strip()
+
+    if user:
+        user_prefix = f"user_{user['id']}"
+        if raw_session and raw_session not in ("current", "default-session", "ssr-session"):
+            return f"{user_prefix}_{raw_session}"
+        return user_prefix
+
+    if not raw_session or raw_session in ("current", "default-session", "ssr-session"):
+        return "guest-session"
+    return f"guest_{raw_session}"
+
+
+# --- Request / Response Models ---
+
+class SignUpRequest(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
+class SignInRequest(BaseModel):
+    email: str
+    password: str
+
+
+class GoogleAuthRequest(BaseModel):
+    email: str
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class UpdateProfileRequest(BaseModel):
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    phone: Optional[str] = None
+    dob: Optional[str] = None
+    plan: Optional[str] = None
 
 
 # --- Request / Response Models ---
@@ -71,6 +145,95 @@ async def health_check():
         "has_groq_key": bool(settings.GROQ_API_KEY),
         "pin_protected": bool(settings.APP_ACCESS_PIN),
     }
+
+
+# --- JWT Authentication Endpoints ---
+
+@router.post("/auth/signup")
+async def signup_endpoint(data: SignUpRequest):
+    """Register a new user account with isolated profile and issue JWT."""
+    clean_email = data.email.strip().lower()
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(status_code=400, detail="Please enter a valid email address.")
+    if len(data.password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
+
+    existing = get_user_by_email(clean_email)
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="An account with this email already exists. Please sign in instead.",
+        )
+
+    pw_hash = hash_password(data.password)
+    user = create_user(
+        email=clean_email,
+        password_hash=pw_hash,
+        name=data.name or clean_email.split("@")[0].replace(".", " ").title(),
+        provider="email",
+    )
+    user.pop("password_hash", None)
+    token = create_access_token({"sub": user["id"], "email": user["email"]})
+    return {"token": token, "user": user}
+
+
+@router.post("/auth/signin")
+async def signin_endpoint(data: SignInRequest):
+    """Authenticate with email and password, returning user profile and signed JWT."""
+    clean_email = data.email.strip().lower()
+    user = get_user_by_email(clean_email)
+    if not user or not user.get("password_hash"):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    if not verify_password(data.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+    user.pop("password_hash", None)
+    token = create_access_token({"sub": user["id"], "email": user["email"]})
+    return {"token": token, "user": user}
+
+
+@router.post("/auth/google")
+async def google_auth_endpoint(data: GoogleAuthRequest):
+    """Authenticate with Google OAuth, finding or provisioning an isolated user profile."""
+    clean_email = data.email.strip().lower()
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(status_code=400, detail="Invalid email address.")
+
+    user = get_user_by_email(clean_email)
+    if not user:
+        user = create_user(
+            email=clean_email,
+            password_hash=None,
+            name=data.name or clean_email.split("@")[0].replace(".", " ").title(),
+            provider="google",
+            avatar_url=data.avatar_url or "",
+            plan="free",
+        )
+    else:
+        user.pop("password_hash", None)
+
+    token = create_access_token({"sub": user["id"], "email": user["email"]})
+    return {"token": token, "user": user}
+
+
+@router.get("/auth/me")
+async def get_me_endpoint(request: Request):
+    """Retrieve the authenticated user's profile from JWT token."""
+    user = get_current_user_required(request)
+    return {"user": user}
+
+
+@router.put("/auth/profile")
+async def update_profile_endpoint(request: Request, data: UpdateProfileRequest):
+    """Update profile attributes for the authenticated user."""
+    user = get_current_user_required(request)
+    updates = {k: v for k, v in data.dict().items() if v is not None}
+    updated = update_user_profile_db(user["id"], updates)
+    if not updated:
+        raise HTTPException(status_code=400, detail="Failed to update profile.")
+    updated.pop("password_hash", None)
+    return {"user": updated}
 
 
 @router.post("/chat")

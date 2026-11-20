@@ -1,3 +1,4 @@
+import { getAuthToken } from "./auth";
 import { getSessionId, getStoredAccessPin } from "./session";
 
 export const API_BASE =
@@ -92,6 +93,10 @@ function getHeaders(customHeaders: Record<string, string> = {}): Record<string, 
     "X-Session-ID": getSessionId(),
     ...customHeaders,
   };
+  const token = getAuthToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
   const pin = getStoredAccessPin();
   if (pin) {
     headers["X-Access-PIN"] = pin;

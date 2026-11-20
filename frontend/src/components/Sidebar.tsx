@@ -97,8 +97,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
   // User details dynamically derived from active auth session
-  const userEmail = currentUser?.email || "akins2chris@gmail.com";
-  const userName = currentUser?.name || "Chris Akins";
+  const userEmail = currentUser?.email || "";
+  const userName = currentUser?.name || (userEmail ? userEmail.split("@")[0] : "Okin User");
   const userInitial = (userName.trim()[0] || userEmail.trim()[0] || "U").toUpperCase();
 
   // Close profile menu on outside click or Escape

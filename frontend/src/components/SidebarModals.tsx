@@ -467,7 +467,7 @@ export const PersonalizeModal: React.FC<{
   onClose: () => void;
 }> = ({ isOpen, onClose }) => {
   const [userName, setUserName] = useState(() => {
-    return (typeof window !== "undefined" && localStorage.getItem("okin_user_name")) || "Chris Akins";
+    return (typeof window !== "undefined" && localStorage.getItem("okin_user_name")) || "";
   });
   const [tone, setTone] = useState(() => {
     return (typeof window !== "undefined" && localStorage.getItem("okin_user_tone")) || "balanced";

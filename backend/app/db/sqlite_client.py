@@ -24,6 +24,28 @@ def init_db(data_dir: Optional[str] = None) -> None:
         cursor = conn.cursor()
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL COLLATE NOCASE,
+                password_hash TEXT,
+                name TEXT NOT NULL,
+                avatar_url TEXT DEFAULT '',
+                phone TEXT DEFAULT '',
+                dob TEXT DEFAULT '',
+                plan TEXT DEFAULT 'free',
+                provider TEXT NOT NULL DEFAULT 'email',
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        cursor.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
+            ON users(email);
+            """
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS threads (
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -367,3 +389,88 @@ def delete_task(session_id: str, task_id: str) -> bool:
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+# --- User Authentication & Profile Operations ---
+
+def create_user(
+    email: str,
+    password_hash: Optional[str],
+    name: str,
+    provider: str = "email",
+    avatar_url: str = "",
+    phone: str = "",
+    dob: str = "",
+    plan: str = "free",
+) -> Dict[str, Any]:
+    user_id = f"usr_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    clean_email = email.strip().lower()
+    clean_name = name.strip() or clean_email.split("@")[0].title()
+
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (id, email, password_hash, name, avatar_url, phone, dob, plan, provider, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, clean_email, password_hash, clean_name, avatar_url, phone, dob, plan, provider, now),
+        )
+        conn.commit()
+
+    return {
+        "id": user_id,
+        "email": clean_email,
+        "name": clean_name,
+        "avatar_url": avatar_url,
+        "phone": phone,
+        "dob": dob,
+        "plan": plan,
+        "provider": provider,
+        "created_at": now,
+    }
+
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    clean_email = email.strip().lower()
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT id, email, password_hash, name, avatar_url, phone, dob, plan, provider, created_at
+            FROM users
+            WHERE email = ? COLLATE NOCASE
+            """,
+            (clean_email,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            SELECT id, email, password_hash, name, avatar_url, phone, dob, plan, provider, created_at
+            FROM users
+            WHERE id = ?
+            """,
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def update_user_profile_db(user_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    allowed_fields = {"name", "avatar_url", "phone", "dob", "plan"}
+    valid_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+    if not valid_updates:
+        return get_user_by_id(user_id)
+
+    set_clause = ", ".join(f"{k} = ?" for k in valid_updates.keys())
+    values = list(valid_updates.values()) + [user_id]
+
+    with get_connection() as conn:
+        conn.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+
+    return get_user_by_id(user_id)
